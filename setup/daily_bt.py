@@ -9,6 +9,18 @@ import argparse
 import ast
 import os
 
+
+
+""" 
+Run this code by typing ... 
+python3 daily_bt.py config.yaml 2023-11-16  Your_path_to_stock_list.feather file  ( in terminal )
+
+
+## 回補艙位
+
+"""
+
+
 # Constants
 CSV_PATH = "/Users/mouyasushi/k_data/永豐"
 
@@ -97,11 +109,11 @@ def execute_short_strategy(open_np, close_np, vwap_np, open_time_np, initial_cap
                 short_position[i] = 0
                 continue
 
-            if i == idx_len - 1:
+            if i == idx_len - 1:  # check 
                 cap += short_position[i] * (2 * entry_price - open_np[i] * (1 + fee_rate))
                 short_position[i] = 0
 
-        equity[i] = cap + short_position[i] * (2 * entry_price - close_np[i])
+        equity[i] = cap + short_position[i] * (2 * entry_price - close_np[i])  ## check 
 
     return equity, trades
 
