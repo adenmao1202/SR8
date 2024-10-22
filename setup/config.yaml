@@ -1,20 +1,18 @@
-# config.yaml
-required_columns: ['ts', 'Open', 'High', 'Low', 'Close', 'Volume']
-price_columns: ['Open', 'High', 'Low', 'Close', 'Volume']
-ma_period: 14
-initial_cap: 1000000
-fee_rate: 0.001
-stop_loss_pct: 0.04
-take_profit_pct: 0.05
-threshold: 0.001
-entry_range: 5
-entry_time: '09:06'
-exit_times: ['11:00', '13:00', '13:30'] 
-batch_size: 10
-num_processes: 4
-trading_days_per_year: 252
-risk_free_rate: 0.02
-# start_time : '2021-10-14 09:06:00'
-# end_time : '2024-10-14 13:30:00'
 
+# Paths
+csv_path: '/Users/mouyasushi/k_data/永豐'  # Specify the path to your CSV files
+output_directory: '/Users/mouyasushi/Desktop/sr8_op_file'  # Specify where to save the output
 
+# Strategy Parameters
+ma_period: 14  # Moving average period (used in data construction)
+initial_cap: 1000000  # Initial capital for backtesting
+fee_rate: 0.001  # Transaction fee rate
+stop_loss_pct: 0.04  # Stop-loss percentage (4% represented as 0.04)
+threshold: 1.01  # Entry threshold ratio (e.g., 1.01 for a 1% increase over previous close)
+entry_time: '09:06'  # Entry time in HH:MM format
+
+# Exit Times for Partial Exits
+exit_times: ['11:00', '13:00', '13:30']  # Times to exit 1/3 of the position
+
+# Multiprocessing Configuration
+num_processes: 4  # Number of processes for parallel backtesting

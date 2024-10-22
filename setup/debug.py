@@ -1,257 +1,221 @@
 import pandas as pd
 import numpy as np
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 import logging
-from numba import jit
 import yaml
-import argparse
-import ast
-import os
+from daily_bt import (
+    load_config, 
+    read_stock_data, 
+    construct_data, 
+    execute_short_strategy,
+    calculate_daily_performance,
+    backtest_single_stock,
+    get_stocks_for_date
+)
 
-# Constants
-CSV_PATH = "/Users/mouyasushi/k_data/永豐"
-
-# Logging setup
+# Set up logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Helper functions
-def load_config(config_path: str) -> dict:
-    with open(config_path, 'r') as file:
-        return yaml.safe_load(file)
-
-def read_stock_data(stock_code: str, date: datetime) -> pd.DataFrame:
-    file_path = Path(CSV_PATH) / f"{stock_code}.csv"
+def create_sample_data():
+    """Creates sample data for testing"""
+    # Create a sample date range for one trading day
+    date_range = pd.date_range('2023-11-16 09:30:00', '2023-11-16 16:00:00', freq='1min')
     
-    if not file_path.exists():
-        logger.error(f"File for stock {stock_code} not found at {file_path}")
-        return pd.DataFrame()
+    # Create sample price data
+    data = pd.DataFrame({
+        'ts': date_range,  # Add ts column explicitly
+        'Open': np.random.uniform(100, 110, len(date_range)),
+        'High': np.random.uniform(105, 115, len(date_range)),
+        'Low': np.random.uniform(95, 105, len(date_range)),
+        'Close': np.random.uniform(100, 110, len(date_range)),
+        'Volume': np.random.randint(1000, 10000, len(date_range))
+    })
     
-    df = pd.read_csv(file_path)
-    df['ts'] = pd.to_datetime(df['ts'])
-    df.set_index('ts', inplace=True)
-    df.sort_index(inplace=True)
-    return df[df.index.date == date.date()]
-
-def construct_data(data: pd.DataFrame, ma_period: int) -> dict:
-    if data.empty:
-        logger.warning(f"No data available for the specified date")
-        return {}
-
-    data['MA'] = data['Close'].rolling(window=ma_period).mean()
-    data['VWAP'] = np.cumsum(data['Volume'] * data['Close']) / np.cumsum(data['Volume'])
+    # Ensure High is highest and Low is lowest
+    data['High'] = np.maximum(data[['Open', 'Close', 'High']].max(axis=1), data['High'])
+    data['Low'] = np.minimum(data[['Open', 'Close', 'Low']].min(axis=1), data['Low'])
     
-    data_np = {col: data[col].to_numpy() for col in ['Open', 'Close', 'High', 'Low', 'Volume', 'MA', 'VWAP']}
-    data_np['open_time'] = (data.index.hour * 60 + data.index.minute).to_numpy(dtype=np.int32)
-    
-    return data_np
+    return data
 
-# Load config
-with open("config.yaml", "r") as file:
-    config = yaml.safe_load(file)
-
-entry_time_str = config['entry_time']
-entry_time_min = int(entry_time_str.split(':')[0]) * 60 + int(entry_time_str.split(':')[1])
-
-# Strategy execution
-@jit(nopython=True)
-def execute_short_strategy(open_np, close_np, vwap_np, open_time_np, initial_cap, fee_rate, stop_loss_pct, threshold):
-    idx_len = len(open_np)
-    equity = np.full(idx_len, initial_cap)
-    short_position = np.zeros(idx_len)
-    entry_price = 0.0
-    trades = 0
-    cap = initial_cap
-    entry_executed = False
-
-    if idx_len < 6:
-        return equity, trades
-
-    previous_day_last_close = close_np[0]
-    first_5_open_avg = np.mean(open_np[:5])
-    
-    if first_5_open_avg / previous_day_last_close <= (1 + threshold):
-        return equity, trades
-
-    for i in range(1, idx_len):
-        if open_time_np[i] == entry_time_min and not entry_executed:
-            entry_price = open_np[i]
-            short_position[i] = cap / (entry_price * (1 + fee_rate))
-            cap = 0
-            trades += 1
-            entry_executed = True
-            continue
-
-        if short_position[i] > 0:
-            if close_np[i] > vwap_np[i]:
-                cap = short_position[i] * (2 * entry_price - open_np[i] * (1 + fee_rate))
-                short_position[i] = 0
-                continue
-            
-            if close_np[i] <= entry_price * (1 + stop_loss_pct):
-                cap = short_position[i] * (2 * entry_price - open_np[i] * (1 + fee_rate))
-                short_position[i] = 0
-                continue
-
-            if i == idx_len - 1:
-                cap += short_position[i] * (2 * entry_price - open_np[i] * (1 + fee_rate))
-                short_position[i] = 0
-
-        equity[i] = cap + short_position[i] * (2 * entry_price - close_np[i])
-
-    return equity, trades
-
-# Performance calculation
-def calculate_daily_performance(equity: np.ndarray, price_data_np: dict, trade_count: int) -> dict:
-    returns = np.diff(equity) / equity[:-1]
-    total_return = (equity[-1] / equity[0]) - 1
-    
-    drawdowns = 1 - equity / np.maximum.accumulate(equity)
-    max_drawdown = np.max(drawdowns)
-    win_rate = np.sum(returns > 0) / len(returns) if len(returns) > 0 else 0
-    
-    daily_volatility = np.std(returns) if len(returns) > 0 else 0
-    
-    return {
-        'Total Trades': trade_count,
-        'Total Return': total_return,
-        'Max Drawdown': max_drawdown,
-        'Win Rate': win_rate,
-        'Daily Volatility': daily_volatility
+def create_sample_config():
+    """Creates sample configuration for testing"""
+    config = {
+        'ma_period': 5,
+        'initial_cap': 100000,
+        'fee_rate': 0.001,
+        'stop_loss_pct': 0.04,
+        'threshold': 1.01,
+        'entry_time': '09:06',
+        'csv_path': './test_data',
+        'output_directory': './test_output'
     }
+    return config
 
-# Backtesting functions
-def backtest_single_stock(stock_code: str, date: datetime, config: dict) -> dict:
-    logger.info(f"Running backtest for stock: {stock_code} on date: {date}")
+def test_load_config():
+    """Test configuration loading"""
+    logger.info("Testing load_config function...")
+    
+    # Create a temporary config file
+    test_config = create_sample_config()
+    with open('test_config.yaml', 'w') as f:
+        yaml.dump(test_config, f)
+    
+    # Test loading
+    loaded_config = load_config('test_config.yaml')
+    assert loaded_config == test_config, "Config loading failed"
+    logger.info("Config loading test passed")
 
-    stock_data = read_stock_data(stock_code, date)
-
-    if stock_data.empty:
-        logger.warning(f"No data for stock: {stock_code} on date: {date}")
-        return {}
-
-    data_np = construct_data(stock_data, config['ma_period'])
-
-    if not data_np:
-        logger.warning(f"No data constructed for stock: {stock_code} on date: {date}")
-        return {}
-
-    equity, trades = execute_short_strategy(
-        data_np['Open'], data_np['Close'], data_np['VWAP'], data_np['open_time'],
-        config['initial_cap'], config['fee_rate'], config['stop_loss_pct'],
-        config['threshold']
-    )
-
-    performance = calculate_daily_performance(equity, data_np, trades)
-    performance['Stock'] = stock_code
-    performance['Date'] = date.date()
-    return performance
-
-def get_stocks_for_date(stock_list_file: str, date: datetime) -> list:
-    logger.info(f"Reading stock list from file: {stock_list_file}")
-    logger.info(f"Searching for date: {date.date()}")
-
-    if not os.path.exists(stock_list_file):
-        logger.error(f"Stock list file {stock_list_file} does not exist.")
-        return []
-
+def test_read_stock_data():
+    """Test stock data reading"""
+    logger.info("Testing read_stock_data function...")
+    
     try:
-        # Force 'StockCode' to be read as a string
-        df = pd.read_csv(stock_list_file, dtype={'StockCode': str}, encoding='utf-8')
-        logger.info(f"CSV file read successfully. Shape: {df.shape}")
-        logger.info(f"Columns: {df.columns.tolist()}")
+        # Create test directory and sample data
+        Path('./test_data').mkdir(exist_ok=True)
+        sample_data = create_sample_data()
         
-        if 'Date' not in df.columns or 'StockCode' not in df.columns:
-            logger.error("Required columns 'Date' and 'StockCode' not found in the CSV file")
-            return []
-
-        df['Date'] = pd.to_datetime(df['Date'])
-        stock_codes = df[df['Date'].dt.date == date.date()]['StockCode'].values
+        # Save with ts column
+        sample_data.to_csv('./test_data/TEST.csv', index=False)
         
-        if len(stock_codes) > 0:
-            stock_code_str = stock_codes[0]
-            
-            # Handle stock codes safely as strings
-            if isinstance(stock_code_str, str):
-                try:
-                    stock_codes = ast.literal_eval(stock_code_str)
-                except (ValueError, SyntaxError) as e:
-                    logger.error(f"Error parsing stock codes for date {date.date()}: {str(e)}")
-                    return []
-            else:
-                stock_codes = list(stock_code_str)
-            
-            logger.info(f"Stocks for date {date.date()}: {stock_codes}")
-            return stock_codes
-        else:
-            logger.warning(f"No stocks found for date: {date.date()}")
-            return []
+        # Test reading
+        date = datetime.strptime('2023-11-16', '%Y-%m-%d')
+        data = read_stock_data('TEST', date, './test_data')
+        
+        assert not data.empty, "Stock data reading failed"
+        assert 'Open' in data.columns, "Missing Open column"
+        assert 'Close' in data.columns, "Missing Close column"
+        assert 'High' in data.columns, "Missing High column"
+        assert 'Low' in data.columns, "Missing Low column"
+        assert 'Volume' in data.columns, "Missing Volume column"
+        
+        logger.info("Stock data reading test passed")
     except Exception as e:
-        logger.error(f"Error reading or processing the stock list file: {str(e)}")
-        return []
+        logger.error(f"Error in test_read_stock_data: {str(e)}")
+        raise
 
-
-def backtest_multiple_stocks(stocks: list, date: datetime, config: dict) -> list:
-    results = []
-    for stock_code in stocks:
-        result = backtest_single_stock(stock_code, date, config)
-        if result:
-            results.append(result)
-    return results
-
-# Main function
-def main(config_path: str, date_str: str, stock_list_file: str):
-    config = load_config(config_path)
+def test_construct_data():
+    """Test data construction"""
+    logger.info("Testing construct_data function...")
     
-    logger.info(f"Config loaded from: {config_path}")
-    logger.info(f"Date string provided: {date_str}")
-    logger.info(f"Stock list file: {stock_list_file}")
+    sample_data = create_sample_data()
+    sample_data.set_index('ts', inplace=True)
+    data_dict = construct_data(sample_data, ma_period=5)
+    
+    required_keys = ['Open', 'Close', 'High', 'Low', 'Volume', 'MA', 'VWAP', 'open_time']
+    assert all(key in data_dict for key in required_keys), "Missing required keys in constructed data"
+    logger.info("Data construction test passed")
+
+def test_execute_short_strategy():
+    """Test short strategy execution"""
+    logger.info("Testing execute_short_strategy function...")
+    
+    sample_data = create_sample_data()
+    sample_data.set_index('ts', inplace=True)
+    data_dict = construct_data(sample_data, ma_period=5)
+    
+    equity, trades = execute_short_strategy(
+        data_dict['Open'],
+        data_dict['Close'],
+        data_dict['VWAP'],
+        data_dict['open_time'],
+        initial_cap=100000,
+        fee_rate=0.001,
+        stop_loss_pct=0.04,
+        threshold=1.01,
+        entry_time_min=546,  # 9:06 AM
+        previous_day_last_close=100.0
+    )
+    
+    assert len(equity) == len(sample_data), "Equity array length mismatch"
+    assert isinstance(trades, int), "Trades count should be integer"
+    logger.info("Short strategy execution test passed")
+
+def test_calculate_daily_performance():
+    """Test performance calculation"""
+    logger.info("Testing calculate_daily_performance function...")
+    
+    # Create sample equity curve
+    equity = np.array([100000, 100100, 100200, 100150, 100300])
+    trades = 2
+    
+    performance = calculate_daily_performance(equity, trades)
+    required_metrics = ['Total Trades', 'Total Return', 'Max Drawdown', 'Win Rate', 'Daily Volatility']
+    
+    assert all(metric in performance for metric in required_metrics), "Missing required performance metrics"
+    logger.info("Performance calculation test passed")
+
+def test_backtest_single_stock():
+    """Test single stock backtesting"""
+    logger.info("Testing backtest_single_stock function...")
+    
+    config = create_sample_config()
+    date = datetime.strptime('2023-11-16', '%Y-%m-%d')
+    
+    # Create test data for current day
+    sample_data = create_sample_data()
+    Path('./test_data').mkdir(exist_ok=True)
+    sample_data.to_csv('./test_data/TEST.csv', index=False)
+    
+    # Create previous day's data
+    prev_date = date - pd.Timedelta(days=1)
+    sample_data['ts'] = sample_data['ts'] - pd.Timedelta(days=1)
+    sample_data.to_csv('./test_data/TEST.csv', mode='a', header=False, index=False)
+    
+    result = backtest_single_stock('TEST', date, config)
+    assert isinstance(result, dict), "Backtest result should be a dictionary"
+    logger.info("Single stock backtest test passed")
+
+def test_get_stocks_for_date():
+    """Test stock list retrieval"""
+    logger.info("Testing get_stocks_for_date function...")
+    
+    # Create sample stock list file
+    date = datetime.strptime('2023-11-16', '%Y-%m-%d')
+    stock_list_df = pd.DataFrame({
+        'index': [date.date()],
+        'stock_list': [str(['TEST1', 'TEST2', 'TEST3'])]
+    })
+    stock_list_df.to_feather('test_stock_list.feather')
+    
+    stocks = get_stocks_for_date('test_stock_list.feather', date)
+    assert isinstance(stocks, list), "Stock list should be a list"
+    assert len(stocks) > 0, "Stock list should not be empty"
+    logger.info("Stock list retrieval test passed")
+
+def main():
+    """Run all tests"""
+    logger.info("Starting debug tests...")
     
     try:
-        date = datetime.strptime(date_str, "%Y-%m-%d")
-        logger.info(f"Parsed date: {date}")
-    except ValueError as e:
-        logger.error(f"Error parsing date: {str(e)}")
-        return
-    
-    stocks = get_stocks_for_date(stock_list_file, date)
-    
-    if stocks:
-        results = backtest_multiple_stocks(stocks, date, config)
+        test_load_config()
+        test_read_stock_data()
+        test_construct_data()
+        test_execute_short_strategy()
+        test_calculate_daily_performance()
+        test_backtest_single_stock()
+        test_get_stocks_for_date()
         
-        if results:
-            logger.info("\nBacktesting Results:")
-            for result in results:
-                for key, value in result.items():
-                    logger.info(f"{key}: {value}")
-                logger.info("---")
-
-            output_file = f'backtest_results_{date.date()}.csv'
-            pd.DataFrame(results).to_csv(output_file, index=False)
-            logger.info(f"\nResults saved to {output_file}")
-        else:
-            logger.warning("No valid results from backtesting.")
-    else:
-        logger.warning("No stocks found for the specified date.")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run daily stock backtesting")
-    parser.add_argument("config", help="Path to configuration file")
-    parser.add_argument("date", help="Date for backtesting (YYYY-MM-DD)")
-    parser.add_argument("stock_list_file", help="Path to file containing stock codes and dates")
-    args = parser.parse_args()
-
-    main(args.config, args.date, args.stock_list_file)
+        logger.info("All tests completed successfully!")
+    except AssertionError as e:
+        logger.error(f"Test failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error during testing: {str(e)}")
+    finally:
+        # Cleanup test files
+        import shutil
+        if Path('./test_data').exists():
+            shutil.rmtree('./test_data')
+        if Path('./test_output').exists():
+            shutil.rmtree('./test_output')
+        if Path('test_config.yaml').exists():
+            Path('test_config.yaml').unlink()
+        if Path('test_stock_list.feather').exists():
+            Path('test_stock_list.feather').unlink()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run daily stock backtesting")
-    parser.add_argument("config", help="Path to configuration file")
-    parser.add_argument("date", help="Date for backtesting (YYYY-MM-DD)")
-    parser.add_argument("stock_list_file", help="Path to file containing stock codes and dates")
-    args = parser.parse_args()
-
-    main(args.config, args.date, args.stock_list_file)
+    main()
