@@ -6,7 +6,7 @@ output_directory: '/Users/mouyasushi/Desktop/sr8_op_file'  # Specify where to sa
 # Strategy Parameters
 ma_period: 14  # Moving average period (used in data construction)
 initial_cap: 1000000  # Initial capital for backtesting
-fee_rate: 0.001  # Transaction fee rate
+fee_rate: 0.0004  # Transaction fee rate: 手續費再調整 
 stop_loss_pct: 0.04  # Stop-loss percentage (4% represented as 0.04)
 threshold: 1.001  # Entry threshold ratio (e.g., 1.01 for a 1% increase over previous close)
 entry_time: '09:06'  # Entry time in HH:MM format
