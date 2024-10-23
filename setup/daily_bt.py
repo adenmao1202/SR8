@@ -244,6 +244,7 @@ def calculate_daily_performance(equity: np.ndarray, trade_count: int) -> dict:
     }
 
 
+
 def get_stocks_for_date(stock_list_file: str, date: datetime) -> list:
     """
     Retrieves the list of stocks for the specified date.
@@ -251,34 +252,63 @@ def get_stocks_for_date(stock_list_file: str, date: datetime) -> list:
     logger.info(f"Reading stock list from Feather file: {stock_list_file}")
 
     try:
+        # Read the Feather file into a DataFrame
         df = pd.read_feather(stock_list_file)
+
+        # Ensure the required columns are present
         if 'index' not in df.columns or 'stock_list' not in df.columns:
             logger.error("Feather file must contain 'index' and 'stock_list' columns")
             return []
+
+        # Rename 'index' to 'Date' and convert to datetime
         df.rename(columns={'index': 'Date'}, inplace=True)
         df['Date'] = pd.to_datetime(df['Date'])
+
+        # Filter the DataFrame for the specified date
         stock_codes_series = df[df['Date'].dt.date == date.date()]['stock_list']
+
         if not stock_codes_series.empty:
-            stock_code_str = stock_codes_series.iloc[0]
-            if isinstance(stock_code_str, str):
+            # Extract the first (and should be only) entry for the date
+            stock_code_entry = stock_codes_series.iloc[0]
+
+            # Debugging: Log the type and content of stock_code_entry
+            logger.debug(f"stock_code_entry type: {type(stock_code_entry)}")
+            logger.debug(f"stock_code_entry content: {stock_code_entry}")
+
+            # Handle different data types
+            if isinstance(stock_code_entry, str):
                 try:
-                    stock_codes = ast.literal_eval(stock_code_str)
+                    stock_codes = ast.literal_eval(stock_code_entry)
                 except (ValueError, SyntaxError) as e:
                     logger.error(f"Error parsing stock codes for date {date.date()}: {e}")
                     return []
-            elif isinstance(stock_code_str, list):
-                stock_codes = stock_code_str
+            elif isinstance(stock_code_entry, np.ndarray):
+                # Convert numpy ndarray to list
+                stock_codes = stock_code_entry.tolist()
+            elif isinstance(stock_code_entry, list):
+                stock_codes = stock_code_entry
+            elif hasattr(stock_code_entry, "__iter__") and not isinstance(stock_code_entry, (str, bytes)):
+                # For any other iterable types (e.g., pandas Series)
+                stock_codes = list(stock_code_entry)
             else:
-                logger.error(f"Unexpected data type for stock codes: {type(stock_code_str)}")
+                logger.error(f"Unexpected data type for stock codes: {type(stock_code_entry)}")
                 return []
-            logger.info(f"Found {len(stock_codes)} stocks for date {date.date()}")
-            return stock_codes
+
+            # Verify that stock_codes is a list of strings
+            if isinstance(stock_codes, list) and all(isinstance(code, str) for code in stock_codes):
+                logger.info(f"Found {len(stock_codes)} stocks for date {date.date()}")
+                return stock_codes
+            else:
+                logger.error(f"Stock codes are not a list of strings for date {date.date()}")
+                return []
         else:
             logger.warning(f"No stocks found for date: {date.date()}")
             return []
     except Exception as e:
         logger.error(f"Error reading stock list: {e}")
         return []
+
+
 
 def backtest_single_stock(stock_code: str, date: datetime, config: dict) -> dict:
     """
@@ -321,17 +351,29 @@ def backtest_single_stock(stock_code: str, date: datetime, config: dict) -> dict
     performance['Date'] = date.date()
     return performance
 
+
+
+
+def backtest_wrapper(args):
+    stock_code, date, config = args
+    return backtest_single_stock(stock_code, date, config)
+
+
 def backtest_multiple_stocks(stocks: list, date: datetime, config: dict) -> list:
     """
     Runs backtest for multiple stocks in parallel.
     """
-    def backtest_wrapper(stock_code):
-        return backtest_single_stock(stock_code, date, config)
-
+    # Prepare arguments for each stock
+    args_list = [(stock_code, date, config) for stock_code in stocks]
+    
     with Pool(processes=config.get('num_processes', 4)) as pool:
-        results = pool.map(backtest_wrapper, stocks)
+        # Use map instead of starmap since backtest_wrapper takes a single argument (a tuple)
+        results = pool.map(backtest_wrapper, args_list)
     
     return [result for result in results if result]
+
+
+
 
 def main(config_path: str, date_str: str, stock_list_file: str):
     """
@@ -388,3 +430,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Program terminated with error: {e}")
         exit(1)
+
