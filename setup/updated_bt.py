@@ -10,6 +10,7 @@ import ast
 import os
 from multiprocessing import Pool
 import warnings
+from portfolio import calculate_portfolio_metrics
 warnings.filterwarnings("ignore")
 
 # Logging setup
@@ -337,7 +338,6 @@ def backtest_single_stock(stock_code: str, date: datetime, config: dict) -> dict
         logger.warning(f"No data constructed for stock: {stock_code} on date: {date.date()}")
         return {}
 
-    # Get previous day's close price
     previous_date = date - pd.Timedelta(days=1)
     previous_data = read_stock_data(stock_code, previous_date, csv_path)
     if previous_data.empty:
@@ -357,8 +357,8 @@ def backtest_single_stock(stock_code: str, date: datetime, config: dict) -> dict
     performance = calculate_daily_performance(equity, trades)
     performance['Stock'] = stock_code
     performance['Date'] = date.date()
+    performance['Equity Curve'] = equity  # Add equity curve to results
     return performance
-
 
 
 
@@ -367,20 +367,27 @@ def backtest_wrapper(args):
     return backtest_single_stock(stock_code, date, config)
 
 
-def backtest_multiple_stocks(stocks: list, date: datetime, config: dict) -> list:
+def backtest_multiple_stocks(stocks: list, date: datetime, config: dict) -> tuple:
     """
-    Runs backtest for multiple stocks in parallel.
+    Runs backtest for multiple stocks in parallel and returns both individual results and equity curves.
     """
-    # Prepare arguments for each stock
     args_list = [(stock_code, date, config) for stock_code in stocks]
     
     with Pool(processes=config.get('num_processes', 4)) as pool:
-        # Use map instead of starmap since backtest_wrapper takes a single argument (a tuple)
         results = pool.map(backtest_wrapper, args_list)
     
-    return [result for result in results if result]
-
-
+    # Separate results and equity curves
+    valid_results = []
+    equity_curves = {}
+    
+    for result in results:
+        if result and 'Stock' in result:
+            stock_code = result['Stock']
+            valid_results.append(result)
+            if 'Equity Curve' in result:
+                equity_curves[stock_code] = result['Equity Curve']
+    
+    return valid_results, equity_curves
 
 
 def main(config_path: str, date_str: str, stock_list_file: str):
@@ -404,27 +411,40 @@ def main(config_path: str, date_str: str, stock_list_file: str):
             logger.warning("No stocks found for the specified date")
             return
 
-        results = backtest_multiple_stocks(stocks, date, config)
+        # Get both individual results and equity curves
+        results, equity_curves = backtest_multiple_stocks(stocks, date, config)
 
         if results:
+            # Calculate portfolio-level metrics
+            results_df = pd.DataFrame(results)
+            portfolio_metrics = calculate_portfolio_metrics(results_df, equity_curves)
+
             output_directory = config.get('output_directory', '.')
             os.makedirs(output_directory, exist_ok=True)
             
-            output_file = Path(output_directory) / f'backtest_results_{date.date()}.csv'
-            pd.DataFrame(results).to_csv(output_file, index=False)
+            # Save individual stock results
+            stock_results_file = Path(output_directory) / f'stock_results_{date.date()}.csv'
+            results_df.to_csv(stock_results_file, index=False)
             
-            logger.info("\nBacktesting Results:")
-            results_df = pd.DataFrame(results)
-            logger.info(f"Total stocks tested: {len(results_df)}")
-            logger.info(f"Average return: {results_df['Total Return'].mean():.2%}")
-            logger.info(f"Average max drawdown: {results_df['Max Drawdown'].mean():.2%}")
-            logger.info(f"Results saved to {output_file}")
+            # Save portfolio metrics
+            portfolio_results_file = Path(output_directory) / f'portfolio_metrics_{date.date()}.csv'
+            pd.DataFrame([portfolio_metrics]).to_csv(portfolio_results_file, index=False)
+            
+            logger.info("\nPortfolio Metrics:")
+            for metric, value in portfolio_metrics.items():
+                if isinstance(value, float):
+                    logger.info(f"{metric}: {value:.2%}")
+                else:
+                    logger.info(f"{metric}: {value}")
+            
+            logger.info(f"Individual stock results saved to {stock_results_file}")
+            logger.info(f"Portfolio metrics saved to {portfolio_results_file}")
         else:
             logger.warning("No valid results from backtesting")
 
     except Exception as e:
         logger.error(f"Error in main execution: {e}", exc_info=True)
-        raise
+        raise e
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run daily stock backtesting")
