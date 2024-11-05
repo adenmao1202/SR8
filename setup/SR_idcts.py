@@ -20,6 +20,7 @@ def SMA(prices: pd.Series, period: int) -> pd.Series:
     # Calculate the SMA using a rolling mean
     return prices.rolling(window=period).mean()
 
+
 def BBands(prices: pd.Series, period: int, ub_mult: float, lb_mult: float) -> tuple:
     """
     Calculate the Bollinger Bands (BBands) using a Simple Moving Average (SMA)
@@ -95,6 +96,7 @@ def TR(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
     high_close = (high - close.shift(1)).abs()
     low_close = (low - close.shift(1)).abs()
     return pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+
 
 def ATR(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
     """

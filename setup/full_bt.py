@@ -12,6 +12,13 @@ import warnings
 import numba
 warnings.filterwarnings("ignore")
 
+""" 
+Final version for now 
+"""
+
+
+
+
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
@@ -402,7 +409,7 @@ def backtest_multiple_stocks(stocks: list, date: datetime, config: dict) -> tupl
     return valid_results, equity_curves
 
 
-def compute_aggregated_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
+def compute_aggregated_metrics(results_df: pd.DataFrame) -> pd.DataFrame:   # potential bug 
     """
     Computes weekly, monthly, and yearly returns from the results DataFrame.
 
@@ -448,7 +455,7 @@ def compute_aggregated_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
 
     return aggregated_metrics
 
-def save_combined_results(results_df, aggregated_metrics, output_file):
+def save_combined_results(results_df, aggregated_metrics, output_file):     # potential bug
     """
     Saves the individual results and aggregated metrics into one CSV file.
 
